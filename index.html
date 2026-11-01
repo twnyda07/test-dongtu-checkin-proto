@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>動土大典 報到（測試用原型）</title>
+<style>
+:root{--bg:#f6f3ec;--card:#fffdf8;--ink:#2b2620;--sub:#6b6157;--line:#ddd3c4;--acc:#7a5c2e;--ok:#2f6b3a;--warn:#8a5a00;--bad:#9b2c2c}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1d1b18;--card:#272420;--ink:#eee7dc;--sub:#b5aa9b;--line:#3d3830;--acc:#d4b483;--ok:#8fd19e;--warn:#e5b25d;--bad:#f19c9c}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.6 -apple-system,"PingFang TC","Noto Sans TC",sans-serif}
+main{max-width:520px;margin:0 auto;padding:16px}
+h1{font-size:21px;margin:8px 0 2px}
+.sub{color:var(--sub);font-size:14px}
+.test{background:var(--warn);color:#fff;font-size:13px;padding:4px 10px;border-radius:6px;display:inline-block;margin-bottom:8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin:12px 0}
+label{display:block;font-size:15px;margin:10px 0 4px;color:var(--sub)}
+input{width:100%;font-size:18px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink)}
+button{width:100%;min-height:52px;font-size:18px;border:0;border-radius:12px;background:var(--acc);color:#fff;margin-top:14px;cursor:pointer}
+button.sec{background:transparent;color:var(--acc);border:1px solid var(--acc)}
+button:disabled{opacity:.55}
+.row{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px dashed var(--line)}
+.row:last-child{border-bottom:0}
+.row b{font-weight:600;text-align:right}
+.msg{padding:12px;border-radius:10px;margin:10px 0;font-size:16px}
+.msg.ok{background:color-mix(in srgb,var(--ok) 14%,transparent);color:var(--ok)}
+.msg.warn{background:color-mix(in srgb,var(--warn) 14%,transparent);color:var(--warn)}
+.msg.bad{background:color-mix(in srgb,var(--bad) 14%,transparent);color:var(--bad)}
+.big{font-size:22px;font-weight:700}
+#qr{display:flex;justify-content:center;margin-top:8px}
+#qr svg{width:180px;height:180px;background:#fff;padding:8px;border-radius:8px}
+.hide{display:none}
+small{color:var(--sub)}
+</style>
+</head>
+<body>
+<main>
+<span class="test">測試用原型・資料全部是假的</span>
+<h1>寶嚴動土大典　報到</h1>
+<div class="sub" id="ver">資料版本讀取中…</div>
+
+<div class="card" id="askCard">
+  <div>請輸入報名時填的資料（只用來在你的手機上解開你自己的資料，不會送出去）</div>
+  <form id="f" autocomplete="off">
+    <label>姓名</label><input id="n" autocomplete="off" inputmode="text">
+    <label>手機號碼（10 碼）</label><input id="p" autocomplete="off" inputmode="numeric">
+    <label>生日（月日 4 碼，例如 0315）</label><input id="b" autocomplete="off" inputmode="numeric" maxlength="4">
+    <button id="go" type="submit">查詢我的資料</button>
+  </form>
+  <small>掃通知單上的 QR code 可以免輸入。</small>
+</div>
+
+<div id="out"></div>
+
+<div class="card hide" id="me">
+  <div class="big" id="nm"></div>
+  <div id="rows"></div>
+  <div id="ckBox"></div>
+  <div id="qr"></div>
+  <small>網路不通時，把這一頁（含上面的 QR）給工作人員看，就能人工報到。</small>
+  <button class="sec" id="bye" type="button">查完了，清除這一頁</button>
+</div>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script>
+/* ===== 設定（原型）===== */
+var CFG={
+  ITER:150000, SALT:'baoyan-dongtu-2026-checkin-v1',
+  FORM:'https://docs.google.com/forms/d/e/1FAIpQLScapq4Lx8Ji4TTCdrV6a0tocjQiZtMjoeh856DF2Dj5vS_ahA/formResponse',
+  ENTRY:'entry.1225980314',
+  EMAIL:'test@example.com',   /* 測試表單還在收 email 才需要；正式表單設成「不收集」後拿掉 */
+  STAGE:function(){ var d=new Date(); return (d.getMonth()===11&&d.getDate()>=26)?'上車':'入住'; }
+};
+var $=function(i){return document.getElementById(i)}, te=new TextEncoder(), REC=null, ID=null;
+function msg(t,c){ $('out').innerHTML='<div class="msg '+(c||'warn')+'">'+t+'</div>'; }
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+function b64u(s){ s=s.replace(/-/g,'+').replace(/_/g,'/'); while(s.length%4) s+='='; return Uint8Array.from(atob(s),function(c){return c.charCodeAt(0)}); }
+var N={name:function(s){return String(s||'').normalize('NFKC').replace(/\s+/g,'')},
+  phone:function(s){var d=String(s||'').replace(/\D/g,''); if(d.indexOf('886')===0) d='0'+d.slice(3); return d.slice(-10)},
+  bday:function(s){return String(s||'').replace(/\D/g,'').slice(-4)}};
+async function derive(n,p,b){
+  var k=await crypto.subtle.importKey('raw',te.encode(N.name(n)+'|'+N.phone(p)+'|'+N.bday(b)),'PBKDF2',false,['deriveBits']);
+  var bits=new Uint8Array(await crypto.subtle.deriveBits({name:'PBKDF2',hash:'SHA-256',salt:te.encode(CFG.SALT),iterations:CFG.ITER},k,512));
+  var id=Array.from(bits.slice(0,16)).map(function(x){return x.toString(16).padStart(2,'0')}).join('');
+  return {id:id,kek:bits.slice(16,48)};
+}
+async function open_(keyBytes,blob){
+  var raw=b64u(blob), k=await crypto.subtle.importKey('raw',keyBytes,'AES-GCM',false,['decrypt']);
+  return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:raw.slice(0,12)},k,raw.slice(12)));
+}
+/* 抓檔：不吃快取、失敗退避重試三次；畫面永遠有字 */
+async function getFile(path){
+  var last='';
+  for(var k=0;k<4;k++){
+    try{
+      var ac=new AbortController(), to=setTimeout(function(){ac.abort()},8000);
+      var r=await fetch(path+'?t='+Date.now(),{cache:'no-store',signal:ac.signal}); clearTimeout(to);
+      if(r.status===404) return null;
+      if(r.ok) return await r.json();
+      last='伺服器回 '+r.status;
+    }catch(e){ last=(e.name==='AbortError')?'等太久':'網路不通'; }
+    msg('連線不順（'+last+'），第 '+(k+1)+' 次重試中…','warn');
+    await new Promise(function(r){setTimeout(r,800*(k+1))});
+  }
+  throw new Error(last||'連不上');
+}
+async function show(id, dk, kek){
+  var t0=performance.now(); var f=await getFile('d/'+id+'.json');
+  if(!f){ msg('查不到這筆資料。請確認姓名、手機 10 碼、生日月日；仍查不到請洽門口工作人員。','bad'); return; }
+  try{
+    if(!dk) dk=await open_(kek,f.w);
+    REC=JSON.parse(new TextDecoder().decode(await open_(dk,f.c))); ID=id;
+  }catch(e){ msg('資料解不開（輸入可能有誤），請再確認一次，或洽工作人員。','bad'); return; }
+  $('out').innerHTML=''; $('askCard').classList.add('hide'); render();
+  $('ver').textContent+='　｜　本次查詢 '+((performance.now()-t0)/1000).toFixed(1)+' 秒';
+}
+function render(){
+  var r=REC; $('me').classList.remove('hide'); $('nm').textContent=r.n+'　您好';
+  var rows=[['所屬分院',r.br],['同行者',r.mt],['飯店',r.ho],['房號',r.rm],['車次',r.bus],['小組',r.gp],['組長',r.ld]];
+  $('rows').innerHTML=rows.map(function(x){return '<div class="row"><span>'+x[0]+'</span><b>'+esc(x[1]||'—')+'</b></div>'}).join('');
+  var st=CFG.STAGE(), loc=pend()[ID+'|'+st];
+  if(r.ci) $('ckBox').innerHTML='<div class="msg ok">✓ 已完成報到（'+esc(r.ci)+'）</div>';
+  else if(loc&&loc.sent) $('ckBox').innerHTML='<div class="msg ok">✓ 已收到您的'+st+'報到（'+loc.at+' 送出）<br><small>工作人員端約 1 分鐘內會顯示</small></div>';
+  else if(loc) $('ckBox').innerHTML='<div class="msg warn">訊號不好，報到已暫存在這支手機，恢復連線會自動送出。也可以直接把這頁給工作人員看。</div>';
+  else $('ckBox').innerHTML='<button id="ck" type="button">我已到達，'+st+'報到</button>';
+  var b=$('ck'); if(b) b.onclick=checkin;
+  try{ var q=qrcode(0,'M'); q.addData('BY|'+r.k+'|'+r.n); q.make(); $('qr').innerHTML=q.createSvgTag({scalable:true}); }catch(e){ $('qr').textContent='報到碼：'+r.k; }
+}
+/* 待送報到：只存「檔案 id＋階段＋時間＋憑證」，不存姓名電話（共用手機不留聯絡資料） */
+function pend(){ try{return JSON.parse(localStorage.getItem('ckq')||'{}')}catch(e){return {}} }
+function savePend(o){ try{localStorage.setItem('ckq',JSON.stringify(o))}catch(e){} }
+async function send(item){
+  var body=new URLSearchParams(); body.set(CFG.ENTRY,[item.id,item.tk,item.st,item.n,item.at].join('|')); if(CFG.EMAIL) body.set('emailAddress',CFG.EMAIL);
+  var ac=new AbortController(), to=setTimeout(function(){ac.abort()},10000);
+  await fetch(CFG.FORM,{method:'POST',mode:'no-cors',body:body,signal:ac.signal}); clearTimeout(to);   /* no-cors：送得出去就算收到（看不到回應內容） */
+}
+async function checkin(){
+  var st=CFG.STAGE(), now=new Date(), at=('0'+now.getHours()).slice(-2)+':'+('0'+now.getMinutes()).slice(-2);
+  var item={id:ID,tk:REC.tk,st:st,n:1,at:now.toISOString(),hm:at,sent:false}, q=pend(); q[ID+'|'+st]=item; savePend(q);
+  $('ckBox').innerHTML='<div class="msg ok">✓ 已收到您的'+st+'報到（'+at+'）…送出中</div>';   /* 樂觀更新：0 秒 */
+  var t0=performance.now();
+  try{ await send(item); item.sent=true; item.at=at; q=pend(); q[ID+'|'+st]=item; savePend(q);
+       $('ckBox').innerHTML='<div class="msg ok">✓ 已收到您的'+st+'報到（'+at+'）<br><small>送出耗時 '+((performance.now()-t0)/1000).toFixed(1)+' 秒；工作人員端約 1 分鐘內會顯示</small></div>';
+  }catch(e){ render(); }
+}
+setInterval(async function(){ var q=pend(); for(var k in q){ if(q[k].sent) continue; try{ await send(q[k]); q[k].sent=true; q[k].at=q[k].hm; savePend(q); if(REC) render(); }catch(e){} } },5000);
+
+$('f').onsubmit=async function(e){ e.preventDefault();
+  var n=$('n').value,p=$('p').value,b=$('b').value;
+  if(!N.name(n)||N.phone(p).length!==10||N.bday(b).length!==4){ msg('請填姓名、手機 10 碼、生日月日 4 碼','warn'); return; }
+  $('go').disabled=true; msg('解開中…（約 1 秒）','warn');
+  try{ var d=await derive(n,p,b); $('n').value=$('p').value=$('b').value=''; await show(d.id,null,d.kek); }
+  catch(err){ msg('目前查不到（'+esc(err.message)+'）。請稍後再按一次，或直接洽門口工作人員。','bad'); }
+  finally{ $('go').disabled=false; }
+};
+$('bye').onclick=function(){ REC=null; ID=null; history.replaceState(null,'',location.pathname); $('me').classList.add('hide'); $('askCard').classList.remove('hide'); $('out').innerHTML=''; };
+(async function(){
+  try{ var v=await getFile('v.json'); $('ver').textContent='資料更新：'+new Date(v.at).toLocaleString('zh-TW',{hour12:false}); }catch(e){ $('ver').textContent='暫時讀不到版本（不影響查詢）'; }
+  var m=location.hash.match(/k=([0-9a-f]{32})\.([A-Za-z0-9_-]+)/);
+  if(m){ $('askCard').classList.add('hide'); msg('讀取中…','warn'); try{ await show(m[1],b64u(m[2])); }catch(e){ $('askCard').classList.remove('hide'); msg('讀不到資料（'+esc(e.message)+'），請稍後再試或洽工作人員。','bad'); } }
+})();
+</script>
+</body>
+</html>
