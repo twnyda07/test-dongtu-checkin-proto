@@ -41,124 +41,90 @@ small{color:var(--sub)}
 <div class="sub" id="ver">資料版本讀取中…</div>
 
 <div class="card" id="askCard">
-  <div>請輸入報名時填的資料（只用來在你的手機上解開你自己的資料，不會送出去）</div>
+  <div>請輸入報名時填的電話（本人或同行家人的電話都可以；手機、市話皆可，有沒有 - 或空白都沒關係）</div>
   <form id="f" autocomplete="off">
-    <label>姓名</label><input id="n" autocomplete="off" inputmode="text">
-    <label>手機號碼（10 碼）</label><input id="p" autocomplete="off" inputmode="numeric">
-    <label>生日（月日 4 碼，例如 0315）</label><input id="b" autocomplete="off" inputmode="numeric" maxlength="4">
-    <button id="go" type="submit">查詢我的資料</button>
+    <label>電話</label><input id="p" type="tel" inputmode="tel" autocomplete="off" placeholder="例如 0912-345-678">
+    <button id="go" type="submit">查詢</button>
   </form>
-  <small>掃通知單上的 QR code 可以免輸入。</small>
+  <small>為保護個資，姓名只顯示部分字。掃通知單上的 QR code 可以免輸入。</small>
 </div>
-
 <div id="out"></div>
-
-<div class="card hide" id="me">
-  <div class="big" id="nm"></div>
-  <div id="rows"></div>
-  <div id="ckBox"></div>
-  <div id="qr"></div>
-  <small>網路不通時，把這一頁（含上面的 QR）給工作人員看，就能人工報到。</small>
-  <button class="sec" id="bye" type="button">查完了，清除這一頁</button>
-</div>
+<div id="list"></div>
+<div class="card hide" id="bye0"><small>網路不通時，把這一頁（含 QR）給工作人員看，就能人工報到。</small>
+  <button class="sec" id="bye" type="button">查完了，清除這一頁</button></div>
 </main>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script src="phone_norm.js"></script>
 <script>
 /* ===== 設定（原型）===== */
-var CFG={
-  ITER:150000, SALT:'baoyan-dongtu-2026-checkin-v1',
+var CFG={ ITER:150000, SALT:'baoyan-dongtu-2026-checkin-v2',
   FORM:'https://docs.google.com/forms/d/e/1FAIpQLScapq4Lx8Ji4TTCdrV6a0tocjQiZtMjoeh856DF2Dj5vS_ahA/formResponse',
-  ENTRY:'entry.1225980314',
-  EMAIL:'test@example.com',   /* 測試表單還在收 email 才需要；正式表單設成「不收集」後拿掉 */
-  STAGE:function(){ var d=new Date(); return (d.getMonth()===11&&d.getDate()>=26)?'上車':'入住'; }
-};
-var $=function(i){return document.getElementById(i)}, te=new TextEncoder(), REC=null, ID=null;
-function msg(t,c){ $('out').innerHTML='<div class="msg '+(c||'warn')+'">'+t+'</div>'; }
+  ENTRY:'entry.1225980314', EMAIL:'test@example.com',   /* 測試表單還在收 email 才需要；正式表單設成「不收集」後拿掉 */
+  STAGE:function(){ var d=new Date(); return (d.getMonth()===11&&d.getDate()>=26)?'上車':'入住'; } };
+var $=function(i){return document.getElementById(i)}, te=new TextEncoder(), RECS=[];
+function msg(t,c){ $('out').innerHTML=t?'<div class="msg '+(c||'warn')+'">'+t+'</div>':''; }
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
 function b64u(s){ s=s.replace(/-/g,'+').replace(/_/g,'/'); while(s.length%4) s+='='; return Uint8Array.from(atob(s),function(c){return c.charCodeAt(0)}); }
-var N={name:function(s){return String(s||'').normalize('NFKC').replace(/\s+/g,'')},
-  phone:function(s){var d=String(s||'').replace(/\D/g,''); if(d.indexOf('886')===0) d='0'+d.slice(3); return d.slice(-10)},
-  bday:function(s){return String(s||'').replace(/\D/g,'').slice(-4)}};
-async function derive(n,p,b){
-  var k=await crypto.subtle.importKey('raw',te.encode(N.name(n)+'|'+N.phone(p)+'|'+N.bday(b)),'PBKDF2',false,['deriveBits']);
-  var bits=new Uint8Array(await crypto.subtle.deriveBits({name:'PBKDF2',hash:'SHA-256',salt:te.encode(CFG.SALT),iterations:CFG.ITER},k,512));
-  var id=Array.from(bits.slice(0,16)).map(function(x){return x.toString(16).padStart(2,'0')}).join('');
-  return {id:id,kek:bits.slice(16,48)};
+async function derive(k){
+  var km=await crypto.subtle.importKey('raw',te.encode(k),'PBKDF2',false,['deriveBits']);
+  var bits=new Uint8Array(await crypto.subtle.deriveBits({name:'PBKDF2',hash:'SHA-256',salt:te.encode(CFG.SALT),iterations:CFG.ITER},km,512));
+  return {id:Array.from(bits.slice(0,16)).map(function(x){return x.toString(16).padStart(2,'0')}).join(''), kek:bits.slice(16,48)};
 }
-async function open_(keyBytes,blob){
-  var raw=b64u(blob), k=await crypto.subtle.importKey('raw',keyBytes,'AES-GCM',false,['decrypt']);
-  return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:raw.slice(0,12)},k,raw.slice(12)));
-}
+async function open_(keyBytes,blob){ var raw=b64u(blob), k=await crypto.subtle.importKey('raw',keyBytes,'AES-GCM',false,['decrypt']);
+  return JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:raw.slice(0,12)},k,raw.slice(12)))); }
 /* 抓檔：不吃快取、失敗退避重試三次；畫面永遠有字 */
-async function getFile(path){
-  var last='';
-  for(var k=0;k<4;k++){
-    try{
-      var ac=new AbortController(), to=setTimeout(function(){ac.abort()},8000);
+async function getFile(path){ var last='';
+  for(var k=0;k<4;k++){ try{ var ac=new AbortController(), to=setTimeout(function(){ac.abort()},8000);
       var r=await fetch(path+'?t='+Date.now(),{cache:'no-store',signal:ac.signal}); clearTimeout(to);
-      if(r.status===404) return null;
-      if(r.ok) return await r.json();
-      last='伺服器回 '+r.status;
+      if(r.status===404) return null; if(r.ok) return await r.json(); last='伺服器回 '+r.status;
     }catch(e){ last=(e.name==='AbortError')?'等太久':'網路不通'; }
-    msg('連線不順（'+last+'），第 '+(k+1)+' 次重試中…','warn');
-    await new Promise(function(r){setTimeout(r,800*(k+1))});
-  }
-  throw new Error(last||'連不上');
-}
-async function show(id, dk, kek){
-  var t0=performance.now(); var f=await getFile('d/'+id+'.json');
-  if(!f){ msg('查不到這筆資料。請確認姓名、手機 10 碼、生日月日；仍查不到請洽門口工作人員。','bad'); return; }
-  try{
-    if(!dk) dk=await open_(kek,f.w);
-    REC=JSON.parse(new TextDecoder().decode(await open_(dk,f.c))); ID=id;
-  }catch(e){ msg('資料解不開（輸入可能有誤），請再確認一次，或洽工作人員。','bad'); return; }
-  $('out').innerHTML=''; $('askCard').classList.add('hide'); render();
-  $('ver').textContent+='　｜　本次查詢 '+((performance.now()-t0)/1000).toFixed(1)+' 秒';
-}
+    msg('連線不順（'+last+'），第 '+(k+1)+' 次重試中…','warn'); await new Promise(function(r){setTimeout(r,800*(k+1))}); }
+  throw new Error(last||'連不上'); }
 function render(){
-  var r=REC; $('me').classList.remove('hide'); $('nm').textContent=r.n+'　您好';
-  var rows=[['所屬分院',r.br],['同行者',r.mt],['飯店',r.ho],['房號',r.rm],['車次',r.bus],['小組',r.gp],['組長',r.ld]];
-  $('rows').innerHTML=rows.map(function(x){return '<div class="row"><span>'+x[0]+'</span><b>'+esc(x[1]||'—')+'</b></div>'}).join('');
-  var st=CFG.STAGE(), loc=pend()[ID+'|'+st];
-  if(r.ci) $('ckBox').innerHTML='<div class="msg ok">✓ 已完成報到（'+esc(r.ci)+'）</div>';
-  else if(loc&&loc.sent) $('ckBox').innerHTML='<div class="msg ok">✓ 已收到您的'+st+'報到（'+loc.at+' 送出）<br><small>工作人員端約 1 分鐘內會顯示</small></div>';
-  else if(loc) $('ckBox').innerHTML='<div class="msg warn">訊號不好，報到已暫存在這支手機，恢復連線會自動送出。也可以直接把這頁給工作人員看。</div>';
-  else $('ckBox').innerHTML='<button id="ck" type="button">我已到達，'+st+'報到</button>';
-  var b=$('ck'); if(b) b.onclick=checkin;
-  try{ var q=qrcode(0,'M'); q.addData('BY|'+r.k+'|'+r.n); q.make(); $('qr').innerHTML=q.createSvgTag({scalable:true}); }catch(e){ $('qr').textContent='報到碼：'+r.k; }
+  var st=CFG.STAGE(), q=pend(), h='';
+  if(RECS.length>1) h+='<div class="msg ok">這支電話共有 '+RECS.length+' 筆報名，全部列在下面</div>';
+  RECS.forEach(function(r,i){
+    var rows=[['所屬分院',r.br],['同行者',r.mt],['飯店',r.ho],['房號',r.rm],['車次',r.bus],['小組',r.gp],['組長',r.ld]], loc=q[r.rid+'|'+st];
+    h+='<div class="card">'+(RECS.length>1?'<small>第 '+(i+1)+' 筆</small>':'')+'<div class="big">'+esc(r.n)+'</div>'+
+      rows.map(function(x){return '<div class="row"><span>'+x[0]+'</span><b>'+esc(x[1]||'—')+'</b></div>'}).join('');
+    if(r.ci) h+='<div class="msg ok">✓ 已完成報到（'+esc(r.ci)+'）</div>';
+    else if(loc&&loc.sent) h+='<div class="msg ok">✓ 已收到'+st+'報到（'+esc(loc.hm)+' 送出）<br><small>工作人員端約 1 分鐘內會顯示'+(loc.ms?'；送出耗時 '+loc.ms+' 秒':'')+'</small></div>';
+    else if(loc) h+='<div class="msg warn">訊號不好，報到已暫存在這支手機，恢復連線會自動送出。也可以把這頁給工作人員看。</div>';
+    else h+='<button type="button" data-i="'+i+'" class="ckb">我已到達，'+st+'報到</button>';
+    h+='<div class="qr" id="qr'+i+'"></div></div>';
+  });
+  $('list').innerHTML=h; $('bye0').classList.toggle('hide',!RECS.length);
+  RECS.forEach(function(r,i){ try{ var qq=qrcode(0,'M'); qq.addData('BY|'+r.k+'|'+r.n); qq.make(); $('qr'+i).innerHTML=qq.createSvgTag({scalable:true}); }catch(e){ $('qr'+i).textContent='報到碼：'+r.k; } });
+  Array.prototype.forEach.call(document.querySelectorAll('.ckb'),function(b){ b.onclick=function(){ checkin(RECS[+b.dataset.i]); }; });
 }
-/* 待送報到：只存「檔案 id＋階段＋時間＋憑證」，不存姓名電話（共用手機不留聯絡資料） */
+/* 待送報到：只存「報名代碼＋階段＋時間＋憑證」，不存電話（共用手機不留聯絡資料） */
 function pend(){ try{return JSON.parse(localStorage.getItem('ckq')||'{}')}catch(e){return {}} }
 function savePend(o){ try{localStorage.setItem('ckq',JSON.stringify(o))}catch(e){} }
-async function send(item){
-  var body=new URLSearchParams(); body.set(CFG.ENTRY,[item.id,item.tk,item.st,item.n,item.at].join('|')); if(CFG.EMAIL) body.set('emailAddress',CFG.EMAIL);
+async function send(item){ var body=new URLSearchParams(); body.set(CFG.ENTRY,[item.rid,item.tk,item.st,item.n,item.at].join('|')); if(CFG.EMAIL) body.set('emailAddress',CFG.EMAIL);
   var ac=new AbortController(), to=setTimeout(function(){ac.abort()},10000);
-  await fetch(CFG.FORM,{method:'POST',mode:'no-cors',body:body,signal:ac.signal}); clearTimeout(to);   /* no-cors：送得出去就算收到（看不到回應內容） */
-}
-async function checkin(){
-  var st=CFG.STAGE(), now=new Date(), at=('0'+now.getHours()).slice(-2)+':'+('0'+now.getMinutes()).slice(-2);
-  var item={id:ID,tk:REC.tk,st:st,n:1,at:now.toISOString(),hm:at,sent:false}, q=pend(); q[ID+'|'+st]=item; savePend(q);
-  $('ckBox').innerHTML='<div class="msg ok">✓ 已收到您的'+st+'報到（'+at+'）…送出中</div>';   /* 樂觀更新：0 秒 */
+  await fetch(CFG.FORM,{method:'POST',mode:'no-cors',body:body,signal:ac.signal}); clearTimeout(to); }   /* no-cors：送得出去就算收到 */
+async function checkin(r){
+  var st=CFG.STAGE(), now=new Date(), hm=('0'+now.getHours()).slice(-2)+':'+('0'+now.getMinutes()).slice(-2);
+  var item={rid:r.rid,tk:r.tk,st:st,n:1,at:now.toISOString(),hm:hm,sent:true}, q=pend(); q[r.rid+'|'+st]=item; savePend(q); render();   /* 樂觀：0 秒 */
   var t0=performance.now();
-  try{ await send(item); item.sent=true; item.at=at; q=pend(); q[ID+'|'+st]=item; savePend(q);
-       $('ckBox').innerHTML='<div class="msg ok">✓ 已收到您的'+st+'報到（'+at+'）<br><small>送出耗時 '+((performance.now()-t0)/1000).toFixed(1)+' 秒；工作人員端約 1 分鐘內會顯示</small></div>';
-  }catch(e){ render(); }
-}
-setInterval(async function(){ var q=pend(); for(var k in q){ if(q[k].sent) continue; try{ await send(q[k]); q[k].sent=true; q[k].at=q[k].hm; savePend(q); if(REC) render(); }catch(e){} } },5000);
-
+  try{ await send(item); item.ms=((performance.now()-t0)/1000).toFixed(1); }catch(e){ item.sent=false; }
+  q=pend(); q[r.rid+'|'+st]=item; savePend(q); render(); }
+setInterval(async function(){ var q=pend(), ch=false; for(var k in q){ if(q[k].sent) continue; try{ await send(q[k]); q[k].sent=true; ch=true; }catch(e){} } if(ch){ savePend(q); if(RECS.length) render(); } },5000);
 $('f').onsubmit=async function(e){ e.preventDefault();
-  var n=$('n').value,p=$('p').value,b=$('b').value;
-  if(!N.name(n)||N.phone(p).length!==10||N.bday(b).length!==4){ msg('請填姓名、手機 10 碼、生日月日 4 碼','warn'); return; }
-  $('go').disabled=true; msg('解開中…（約 1 秒）','warn');
-  try{ var d=await derive(n,p,b); $('n').value=$('p').value=$('b').value=''; await show(d.id,null,d.kek); }
-  catch(err){ msg('目前查不到（'+esc(err.message)+'）。請稍後再按一次，或直接洽門口工作人員。','bad'); }
-  finally{ $('go').disabled=false; }
-};
-$('bye').onclick=function(){ REC=null; ID=null; history.replaceState(null,'',location.pathname); $('me').classList.add('hide'); $('askCard').classList.remove('hide'); $('out').innerHTML=''; };
+  var keys=phoneQueryKeys_($('p').value);
+  if(!keys.length){ msg('請輸入完整的電話號碼（手機 10 碼，或市話含區碼）','warn'); return; }
+  $('go').disabled=true; msg('查詢中…','warn'); var t0=performance.now();
+  try{ var got=null;
+    for(var i=0;i<keys.length&&!got;i++){ var d=await derive(keys[i]); var f=await getFile('d/'+d.id+'.json'); if(f) got=await open_(d.kek,f.c); }   /* 完整號碼 → 末 9 碼 → 補 0，第一個有的就用 */
+    if(!got){ msg('查不到這支電話的報名資料。請確認是報名時填的電話（本人或同行家人皆可），或洽門口工作人員。','bad'); return; }
+    $('p').value=''; RECS=got; msg(''); render(); $('ver').textContent=$('ver').textContent.split('｜')[0]+'｜ 本次查詢 '+((performance.now()-t0)/1000).toFixed(1)+' 秒';
+  }catch(err){ msg('目前查不到（'+esc(err.message)+'）。請稍後再按一次，或直接洽門口工作人員。','bad'); }
+  finally{ $('go').disabled=false; } };
+$('bye').onclick=function(){ RECS=[]; history.replaceState(null,'',location.pathname); $('list').innerHTML=''; $('bye0').classList.add('hide'); msg(''); };
 (async function(){
   try{ var v=await getFile('v.json'); $('ver').textContent='資料更新：'+new Date(v.at).toLocaleString('zh-TW',{hour12:false}); }catch(e){ $('ver').textContent='暫時讀不到版本（不影響查詢）'; }
   var m=location.hash.match(/k=([0-9a-f]{32})\.([A-Za-z0-9_-]+)/);
-  if(m){ $('askCard').classList.add('hide'); msg('讀取中…','warn'); try{ await show(m[1],b64u(m[2])); }catch(e){ $('askCard').classList.remove('hide'); msg('讀不到資料（'+esc(e.message)+'），請稍後再試或洽工作人員。','bad'); } }
+  if(m){ msg('讀取中…','warn'); try{ var f=await getFile('r/'+m[1]+'.json'); if(!f){ msg('這個 QR 已失效，請改輸入電話查詢。','bad'); return; } RECS=[await open_(b64u(m[2]),f.c)]; msg(''); render(); }catch(e){ msg('讀不到資料（'+esc(e.message)+'），請稍後再試或洽工作人員。','bad'); } }
 })();
 </script>
 </body>
